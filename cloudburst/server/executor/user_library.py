@@ -15,6 +15,7 @@
 import zmq
 
 import cloudburst.server.utils as sutils
+from cloudburst.shared.event_log import emit_event
 from cloudburst.shared.serializer import Serializer
 
 serializer = Serializer()
@@ -61,7 +62,19 @@ class CloudburstUserLibrary(AbstractCloudburstUserLibrary):
         self.recv_inbox_socket.bind(self.address)
 
     def put(self, ref, value):
-        return self.anna_client.put(ref, serializer.dump_lattice(value))
+        result = self.anna_client.put(ref, serializer.dump_lattice(value))
+        if type(ref) == list:
+            keys = ref
+        else:
+            keys = [ref]
+        for key in keys:
+            emit_event(
+                'crdt_merge_applied',
+                ok=True,
+                key_id=key,
+                attributes={'crdt': {'object_id': key, 'merge_trigger': 'user_put'}}
+            )
+        return result
 
     def get(self, ref, deserialize=True):
         if type(ref) != list:
@@ -78,7 +91,41 @@ class CloudburstUserLibrary(AbstractCloudburstUserLibrary):
             if kv_pairs[key] is None:
                 # If the key is not in the kvs, we can just return None.
                 result[key] = None
+                emit_event(
+                    'state_read',
+                    ok=False,
+                    key_id=key,
+                    state_unit_id=key,
+                    error_code='key_not_found',
+                    attributes={'operation': 'kvs_get'}
+                )
             else:
+                emit_event(
+                    'state_read',
+                    ok=True,
+                    key_id=key,
+                    state_unit_id=key,
+                    attributes={'operation': 'kvs_get'}
+                )
+                if hasattr(kv_pairs[key], 'reveal'):
+                    try:
+                        revealed = kv_pairs[key].reveal()
+                        if hasattr(revealed, '__len__') and len(revealed) > 1:
+                            emit_event(
+                                'crdt_divergence_detected',
+                                ok=True,
+                                key_id=key,
+                                attributes={'crdt': {'object_id': key}}
+                            )
+                        else:
+                            emit_event(
+                                'crdt_converged',
+                                ok=True,
+                                key_id=key,
+                                attributes={'crdt': {'object_id': key}}
+                            )
+                    except Exception:
+                        pass
                 if deserialize:
                     result[key] = serializer.load_lattice(kv_pairs[key])
                 else:

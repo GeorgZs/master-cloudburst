@@ -26,6 +26,7 @@ from cloudburst.shared.proto.cloudburst_pb2 import (
 )
 from cloudburst.shared.reference import CloudburstReference
 from cloudburst.shared.serializer import Serializer
+from cloudburst.shared.event_log import emit_event
 
 serializer = Serializer()
 
@@ -58,6 +59,13 @@ def call_function(func_call_socket, pusher_cache, policy):
     ip, tid = result
     sckt = pusher_cache.get(utils.get_exec_address(ip, tid))
     sckt.send(call.SerializeToString())
+    emit_event(
+        'placement_change',
+        ok=True,
+        function_id=call.name,
+        component_id=f'{ip}:{tid}',
+        attributes={'reason': 'call_function_route'}
+    )
 
     # Send a success response to the user with the response key.
     response.success = True
@@ -108,7 +116,7 @@ def call_dag(call, pusher_cache, dags, policy, request_id=None):
 
         colocated = []
         if fref.name in dag.colocated:
-            colocated = list(dag.colocated, colocated, schedule)
+            colocated = list(dag.colocated)
 
         result = policy.pick_executor(refs, fref.name, colocated, schedule)
         if result is None:
@@ -119,6 +127,13 @@ def call_dag(call, pusher_cache, dags, policy, request_id=None):
 
         ip, tid = result
         schedule.locations[fref.name] = ip + ':' + str(tid)
+        emit_event(
+            'placement_change',
+            ok=True,
+            function_id=fref.name,
+            component_id=f'{ip}:{tid}',
+            attributes={'reason': 'call_dag_route', 'dag_id': schedule.id}
+        )
 
         # copy over arguments into the dag schedule
         arg_list = schedule.arguments[fref.name]

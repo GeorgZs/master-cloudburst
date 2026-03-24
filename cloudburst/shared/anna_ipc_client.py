@@ -29,6 +29,7 @@ from cloudburst.shared.proto.causal_pb2 import (
 from cloudburst.shared.proto.cloudburst_pb2 import (
     SINGLE, MULTI  # Cloudburst's consistency modes
 )
+from cloudburst.shared.event_log import emit_event
 
 GET_REQUEST_ADDR = "ipc:///requests/get"
 PUT_REQUEST_ADDR = "ipc:///requests/put"
@@ -92,9 +93,24 @@ class AnnaIpcClient(BaseAnnaClient):
 
             for tp in resp.tuples:
                 if tp.error == KEY_DNE or tp.lattice_type == NONE:
+                    emit_event(
+                        'state_read',
+                        ok=False,
+                        key_id=tp.key,
+                        state_unit_id=tp.key,
+                        error_code='key_dne',
+                        attributes={'operation': 'anna_get'}
+                    )
                     continue
 
                 kv_pairs[tp.key] = self._deserialize(tp)
+                emit_event(
+                    'state_read',
+                    ok=True,
+                    key_id=tp.key,
+                    state_unit_id=tp.key,
+                    attributes={'operation': 'anna_get'}
+                )
 
             return kv_pairs
 
@@ -186,6 +202,14 @@ class AnnaIpcClient(BaseAnnaClient):
                 for tup in resp.tuples:
                     num_responses += 1
                     result[tup.key] = (tup.error == NO_ERROR)
+                    emit_event(
+                        'state_write',
+                        ok=(tup.error == NO_ERROR),
+                        key_id=tup.key,
+                        state_unit_id=tup.key,
+                        error_code='put_failed' if tup.error != NO_ERROR else '',
+                        attributes={'operation': 'anna_put'}
+                    )
 
         return result
 
@@ -213,6 +237,12 @@ class AnnaIpcClient(BaseAnnaClient):
 
             return False
         else:
+            emit_event(
+                'crdt_merge_applied',
+                ok=True,
+                key_id=key,
+                attributes={'crdt': {'object_id': key, 'merge_trigger': 'causal_put'}}
+            )
             return True
 
     def _prepare_causal_data_request(self, client_id, keys, consistency):

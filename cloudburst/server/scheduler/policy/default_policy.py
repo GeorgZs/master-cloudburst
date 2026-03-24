@@ -32,6 +32,7 @@ from cloudburst.server.scheduler.utils import (
     get_pin_address,
     get_unpin_address
 )
+from cloudburst.shared.event_log import emit_event
 
 sys_random = random.SystemRandom()
 
@@ -120,6 +121,13 @@ class DefaultCloudburstSchedulerPolicy(BaseCloudburstSchedulerPolicy):
 
             for ip, tid in executors:
                 if ip in candidate_nodes:
+                    emit_event(
+                        'placement_change',
+                        ok=True,
+                        function_id=function_name,
+                        component_id=f'{ip}:{tid}',
+                        attributes={'reason': 'colocation_pick'}
+                    )
                     return ip, tid
 
         for executor in self.backoff:
@@ -130,10 +138,25 @@ class DefaultCloudburstSchedulerPolicy(BaseCloudburstSchedulerPolicy):
         # default backoff and locality policy.
         if function_name:
             if self.policy == 'random':
-                return random.choice(self.function_locations[function_name])
+                selected = random.choice(self.function_locations[function_name])
+                emit_event(
+                    'placement_change',
+                    ok=True,
+                    function_id=function_name,
+                    component_id=f'{selected[0]}:{selected[1]}',
+                    attributes={'reason': 'policy_random'}
+                )
+                return selected
             if self.policy == 'round-robin':
                 executor = self.function_locations[function_name].pop(0)
                 self.function_locations[function_name].append(executor)
+                emit_event(
+                    'placement_change',
+                    ok=True,
+                    function_id=function_name,
+                    component_id=f'{executor[0]}:{executor[1]}',
+                    attributes={'reason': 'policy_round_robin'}
+                )
                 return executor
 
 
@@ -198,6 +221,13 @@ class DefaultCloudburstSchedulerPolicy(BaseCloudburstSchedulerPolicy):
         if not max_ip:
             logging.error('No available executors.')
 
+        emit_event(
+            'placement_change',
+            ok=max_ip is not None,
+            function_id=function_name,
+            component_id=f'{max_ip[0]}:{max_ip[1]}' if max_ip else '',
+            attributes={'reason': 'policy_pick_executor'}
+        )
         return max_ip
 
     def pin_function(self, dag_name, function_ref, colocated):
@@ -297,6 +327,13 @@ class DefaultCloudburstSchedulerPolicy(BaseCloudburstSchedulerPolicy):
                 # ID to the caller.
                 self.pending_dags[dag_name].append((function_ref.name, (node,
                                                                         tid)))
+                emit_event(
+                    'scale_up_end',
+                    ok=True,
+                    function_id=function_ref.name,
+                    component_id=f'{node}:{tid}',
+                    attributes={'reason': 'pin_function_success', 'dag_name': dag_name}
+                )
                 return True
             else:
                 # The pin operation was rejected, remove node and try again.
@@ -359,6 +396,12 @@ class DefaultCloudburstSchedulerPolicy(BaseCloudburstSchedulerPolicy):
                 self.unpinned_cpu_executors.discard(key)
             else:
                 self.unpinned_gpu_executors.discard(key)
+            emit_event(
+                'scale_down_end',
+                ok=True,
+                component_id=f'{key[0]}:{key[1]}',
+                attributes={'reason': 'executor_depart'}
+            )
 
             return
 
@@ -376,7 +419,15 @@ class DefaultCloudburstSchedulerPolicy(BaseCloudburstSchedulerPolicy):
                 if function_name in self.function_locations:
                     self.function_locations[function_name].remove(key)
 
+        was_known = key in self.thread_statuses
         self.thread_statuses[key] = status
+        if not was_known:
+            emit_event(
+                'worker_ready',
+                ok=True,
+                component_id=f'{key[0]}:{key[1]}',
+                attributes={'reason': 'status_update'}
+            )
         for function_name in status.functions:
             if function_name not in self.function_locations:
                 self.function_locations[function_name] = list()

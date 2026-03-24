@@ -27,6 +27,7 @@ from cloudburst.server.executor.call import exec_function, exec_dag_function
 from cloudburst.server.executor.pin import pin, unpin
 from cloudburst.server.executor.user_library import CloudburstUserLibrary
 from cloudburst.shared.anna_ipc_client import AnnaIpcClient
+from cloudburst.shared.event_log import emit_event
 from cloudburst.shared.proto.cloudburst_pb2 import (
     DagSchedule,
     DagTrigger,
@@ -99,6 +100,12 @@ def executor(ip, mgmt_ip, schedulers, thread_id):
 
     user_library = CloudburstUserLibrary(context, pusher_cache, ip, thread_id,
                                       client)
+    emit_event(
+        'worker_start',
+        ok=True,
+        component_id=f'{ip}:{thread_id}',
+        attributes={'reason': 'executor_start'}
+    )
 
     status = ThreadStatus()
     status.ip = ip
@@ -106,6 +113,12 @@ def executor(ip, mgmt_ip, schedulers, thread_id):
     status.running = True
     status.type = exec_type
     utils.push_status(schedulers, pusher_cache, status)
+    emit_event(
+        'worker_ready',
+        ok=True,
+        component_id=f'{ip}:{thread_id}',
+        attributes={'reason': 'initial_status_push'}
+    )
 
     departing = False
 
@@ -163,10 +176,22 @@ def executor(ip, mgmt_ip, schedulers, thread_id):
 
         if pin_socket in socks and socks[pin_socket] == zmq.POLLIN:
             work_start = time.time()
+            emit_event(
+                'scale_up_start',
+                ok=True,
+                component_id=f'{ip}:{thread_id}',
+                attributes={'reason': 'pin_request'}
+            )
             batching = pin(pin_socket, pusher_cache, client, status,
                            function_cache, runtimes, exec_counts, user_library,
                            local, batching)
             utils.push_status(schedulers, pusher_cache, status)
+            emit_event(
+                'placement_change',
+                ok=True,
+                component_id=f'{ip}:{thread_id}',
+                attributes={'reason': 'pin_applied', 'functions': list(status.functions)}
+            )
 
             elapsed = time.time() - work_start
             event_occupancy['pin'] += elapsed
@@ -177,6 +202,12 @@ def executor(ip, mgmt_ip, schedulers, thread_id):
             unpin(unpin_socket, status, function_cache, runtimes,
                   exec_counts)
             utils.push_status(schedulers, pusher_cache, status)
+            emit_event(
+                'scale_down_start',
+                ok=True,
+                component_id=f'{ip}:{thread_id}',
+                attributes={'reason': 'unpin_request'}
+            )
 
             elapsed = time.time() - work_start
             event_occupancy['unpin'] += elapsed
@@ -398,6 +429,12 @@ def executor(ip, mgmt_ip, schedulers, thread_id):
             status.ClearField('functions')
             status.running = False
             utils.push_status(schedulers, pusher_cache, status)
+            emit_event(
+                'scale_down_start',
+                ok=True,
+                component_id=f'{ip}:{thread_id}',
+                attributes={'reason': 'self_depart'}
+            )
 
             departing = True
 

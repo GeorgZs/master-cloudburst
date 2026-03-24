@@ -36,6 +36,7 @@ from cloudburst.shared.proto.cloudburst_pb2 import (
 )
 from cloudburst.shared.reference import CloudburstReference
 from cloudburst.shared.serializer import Serializer
+from cloudburst.shared.event_log import emit_event
 
 serializer = Serializer()
 
@@ -43,6 +44,9 @@ serializer = Serializer()
 def exec_function(exec_socket, kvs, user_library, cache, function_cache):
     call = FunctionCall()
     call.ParseFromString(exec_socket.recv())
+    invoke_start = time.time()
+    invoke_ok = True
+    invoke_error = ''
 
     fargs = [serializer.load(arg) for arg in call.arguments.values]
 
@@ -56,6 +60,8 @@ def exec_function(exec_socket, kvs, user_library, cache, function_cache):
                      (call.name))
         sutils.error.error = FUNC_NOT_FOUND
         result = ('ERROR', sutils.error.SerializeToString())
+        invoke_ok = False
+        invoke_error = 'func_not_found'
     else:
         function_cache[call.name] = f
         try:
@@ -72,6 +78,19 @@ def exec_function(exec_socket, kvs, user_library, cache, function_cache):
                               (str(e)))
             sutils.error.error = EXECUTION_ERROR
             result = ('ERROR: ' + str(e), sutils.error.SerializeToString())
+            invoke_ok = False
+            invoke_error = str(e)
+
+    emit_event(
+        'invoke_end',
+        ok=invoke_ok,
+        function_id=call.name,
+        latency_ms=(time.time() - invoke_start) * 1000.0,
+        error_code=invoke_error,
+        attributes={
+            'consistency': call.consistency,
+        }
+    )
 
     if call.consistency == NORMAL:
         result = serializer.dump_lattice(result)
@@ -217,8 +236,34 @@ def _resolve_ref_causal(refs, kvs, schedule, key_version_locations,
             key_version_locations[address].extend(versions)
 
     for key in kv_pairs:
+        if hasattr(kv_pairs[key], 'reveal'):
+            try:
+                revealed = kv_pairs[key].reveal()
+                if hasattr(revealed, '__len__'):
+                    if len(revealed) > 1:
+                        emit_event(
+                            'crdt_divergence_detected',
+                            ok=True,
+                            key_id=key,
+                            attributes={'crdt': {'object_id': key}}
+                        )
+                    else:
+                        emit_event(
+                            'crdt_converged',
+                            ok=True,
+                            key_id=key,
+                            attributes={'crdt': {'object_id': key}}
+                        )
+            except Exception:
+                pass
         if key in dependencies:
             dependencies[key].merge(kv_pairs[key].vector_clock)
+            emit_event(
+                'crdt_merge_applied',
+                ok=True,
+                key_id=key,
+                attributes={'crdt': {'object_id': key, 'merge_trigger': 'causal_dependency_merge'}}
+            )
         else:
             dependencies[key] = kv_pairs[key].vector_clock
 

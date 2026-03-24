@@ -29,6 +29,7 @@ from cloudburst.shared.proto.cloudburst_pb2 import (
 )
 import cloudburst.server.utils as sutils
 from cloudburst.server.scheduler import utils
+from cloudburst.shared.event_log import emit_event
 
 sys_random = random.SystemRandom()
 
@@ -83,6 +84,12 @@ def create_dag(dag_create_socket, pusher_cache, kvs, dags, policy,
             if fref.name in dag.colocated:
                 colocated = list(dag.colocated)
 
+            emit_event(
+                'scale_up_start',
+                ok=True,
+                function_id=fref.name,
+                attributes={'reason': 'dag_pin_attempt', 'dag_name': dag.name}
+            )
             success = policy.pin_function(dag.name, fref, colocated)
 
             # The policy engine will only return False if it ran out of
@@ -90,6 +97,13 @@ def create_dag(dag_create_socket, pusher_cache, kvs, dags, policy,
             if not success:
                 logging.info(f'Creating DAG {dag.name} failed due to ' +
                              'insufficient resources.')
+                emit_event(
+                    'scale_up_end',
+                    ok=False,
+                    function_id=fref.name,
+                    error_code='no_resources',
+                    attributes={'reason': 'dag_pin_failed', 'dag_name': dag.name}
+                )
                 sutils.error.error = NO_RESOURCES
                 dag_create_socket.send(sutils.error.SerializeToString())
 
