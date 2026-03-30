@@ -76,6 +76,9 @@ elif bname == 'summa':
 elif bname == 'scaling':
     total, scheduler, kvs, retries = scaling.run(cloudburst_client, num_requests,
                                                  None)
+elif bname == 'stateful':
+    total, scheduler, kvs, retries = stateful.run(cloudburst_client, num_requests,
+                                                   None)
 else:
     print('Unknown benchmark type: %s!' % (bname))
 
