@@ -16,6 +16,7 @@
 
 
 import logging
+import os
 import sys
 
 from cloudburst.client.client import CloudburstConnection
@@ -43,11 +44,13 @@ if len(sys.argv) < 4:
 f_elb = sys.argv[2]
 num_requests = int(sys.argv[3])
 
+local = os.environ.get('CLOUDBURST_LOCAL', '').lower() in ('1', 'true', 'yes')
+
 if len(sys.argv) == 5:
     ip = sys.argv[4]
-    cloudburst_client = CloudburstConnection(f_elb, ip)
+    cloudburst_client = CloudburstConnection(f_elb, ip, local=local)
 else:
-    cloudburst_client = CloudburstConnection(f_elb)
+    cloudburst_client = CloudburstConnection(f_elb, local=local)
 
 bname = sys.argv[1]
 

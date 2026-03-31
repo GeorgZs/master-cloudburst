@@ -43,7 +43,7 @@ REPORT_THRESH = 5
 BATCH_SIZE_MAX = 20
 
 
-def executor(ip, mgmt_ip, schedulers, thread_id):
+def executor(ip, mgmt_ip, schedulers, thread_id, anna_ip=None):
     logging.basicConfig(filename='log_executor.txt', level=logging.INFO,
                         format='%(asctime)s %(message)s')
 
@@ -95,7 +95,8 @@ def executor(ip, mgmt_ip, schedulers, thread_id):
         client = AnnaIpcClient(thread_id, context)
         local = False
     else:
-        client = AnnaTcpClient('127.0.0.1', '127.0.0.1', local=True, offset=1)
+        anna_addr = anna_ip if anna_ip else '127.0.0.1'
+        client = AnnaTcpClient(anna_addr, ip, local=True, offset=1)
         local = True
 
     user_library = CloudburstUserLibrary(context, pusher_cache, ip, thread_id,
@@ -537,5 +538,6 @@ if __name__ == '__main__':
     conf = sutils.load_conf(conf_file)
     exec_conf = conf['executor']
 
+    anna_ip = conf.get('anna', {}).get('private_ip', None)
     executor(conf['ip'], conf['mgmt_ip'], exec_conf['scheduler_ips'],
-             int(exec_conf['thread_id']))
+             int(exec_conf['thread_id']), anna_ip=anna_ip)
